@@ -499,10 +499,21 @@ create table story_sentence_counts (
 
 create index story_sentence_counts_md5 on story_sentence_counts( media_id, publish_week, sentence_md5 );
 
+CREATE TABLE stems (
+    stems_id                        serial          primary key,
+    stem                            varchar(256)    NOT NULL UNIQUE
+);
+
+CREATE TABLE terms (
+    terms_id                        serial          primary key,
+    stems_id                        int             NOT NULL references stems,
+    term                            varchar(256)    NOT NULL UNIQUE
+);
+
 create table story_sentence_words (
        stories_id                   int             not null, /* references stories on delete cascade, */
-       term                         varchar(256)    not null,
-       stem                         varchar(256)    not null,
+       terms_id                     int             not null references terms,
+       stems_id                     int             not null references stems,
        stem_count                   int             not null,
        sentence_number              int             not null,
        media_id                     int             not null, /* references media on delete cascade, */
@@ -510,8 +521,10 @@ create table story_sentence_words (
 );
 
 create index story_sentence_words_story on story_sentence_words (stories_id, sentence_number);
-create index story_sentence_words_dsm on story_sentence_words (date_trunc('day', publish_date), stem, media_id);
+create index story_sentence_words_dsm on story_sentence_words (date_trunc('day', publish_date), stems_id, media_id);
 create index story_sentence_words_day on story_sentence_words(date_trunc('day', publish_date));
+
+create view story_sentence_words_terms_stems as select story_sentence_words.*, terms.term, stems.stem from story_sentence_words, terms, stems where story_sentence_words.stems_id=stems.stems_id and story_sentence_words.terms_id=terms.terms_id;
 
 create table daily_words (
        daily_words_id               serial          primary key,

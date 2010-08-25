@@ -6,6 +6,8 @@ use strict;
 use Encode;
 use Encode::HanConvert;
 use Perl6::Say;
+
+use Data::Dumper;
 use Lingua::ZH::WordSegmenter;
 
 use Lingua::EN::Sentence::MediaWords;
@@ -16,6 +18,7 @@ use MediaWords::Util::StopWords;
 
 use Date::Format;
 use Date::Parse;
+use CHI;
 use utf8;
 
 # minimum length of words in story_sentence_words
@@ -36,23 +39,100 @@ sub _get_story
     }
 }
 
+
+my $_cache = undef;
+
+sub _get_terms_and_stems_ids
+{
+    my ( $db, $term, $stem ) = @_;
+
+    #say STDERR "in _get_terms_and_stems_ids";
+
+    if (!$_cache)
+      {
+
+	my $hash = {};
+
+	$_cache = CHI->new(
+			   driver           => 'Memory',
+			   datastore => $hash,
+			   #expires_in       => '1 week',
+			   #expires_variance => '0.1',
+			   max_size       => '10m'
+			  );
+	die unless $_cache;
+      }
+
+    my $term_row = $_cache->get($term);
+
+    if ( !$term_row )
+    {
+      $term_row = $db->query('select * from terms where term = ? ', $term)->hash;
+
+      #say Dumper($term_row);
+      if (!$term_row)
+      {
+	  #say STDERR "in _get_terms_and_stems_ids adding term($term) to db";
+	  my $stems_row = $db->find_or_create('stems', { stem => $stem } );
+	
+	  my $stems_id = $stems_row->{stems_id};
+	  
+	  $term_row = $db->create('terms', { term => $term, stems_id => $stems_id } );
+	  $db->commit;
+      }
+      else
+      {
+	  #say STDERR "in _get_terms_and_stems_ids term($term) already in db";
+      }
+      
+      #say STDERR "in _get_terms_and_stems_ids adding term($term) to cache";
+
+      $_cache->set($term, $term_row);
+    }
+    else
+    {
+      #say STDERR "in _get_terms_and_stems_ids term($term) already in cache";
+    }
+
+    die unless defined ($term_row->{stems_id});
+
+    my $stems_id = $term_row->{stems_id};
+    my $terms_id = $term_row->{terms_id};
+
+    return { stems_id => $stems_id, terms_id => $terms_id };
+}
+
 # given a hash of word counts by sentence, insert the words into the db
 sub _insert_story_sentence_words
 {
     my ( $db, $story, $word_counts ) = @_;
 
+    #say STDERR "in _insert_story_sentence_words";
+
+    #say STDERR Dumper($word_counts);
+
     while ( my ( $sentence_num, $sentence_counts ) = each( %{ $word_counts } ) )
     {
+        #say STDERR 'in while ( my ( $sentence_num, $sentence_counts )';
+
         while ( my ( $stem, $hash ) = each( %{ $sentence_counts } ) )
         {
+
+	    #say STDERR 'in while ( my ( $stem, $hash )';
+
+	    my $res = _get_terms_and_stems_ids(  $db, encode_utf8( lc( $hash->{ word } ) ), $stem);
+
+	    my $terms_id = $res->{terms_id};
+	    my $stems_id = $res->{stems_id};
+
             $db->query(
-'insert into story_sentence_words (stories_id, stem_count, sentence_number, stem, term, publish_date, media_id) '
+'insert into story_sentence_words (stories_id, stem_count, sentence_number, stems_id, terms_id, publish_date, media_id) '
                   . '  values ( ?,?,?,?,?,?,? )',
                 $story->{ stories_id },
                 $hash->{ count },
                 $sentence_num,
-                encode_utf8( $stem ),
-                encode_utf8( lc( $hash->{ word } ) ),
+                $stems_id,
+                $terms_id,
                 $story->{ publish_date },
                 $story->{ media_id }
             );
@@ -457,7 +537,7 @@ sub _update_daily_words
     {
         $db->query( "insert into daily_words (media_sets_id, term, stem, stem_count, publish_day, dashboard_topics_id) " .
               "  select media_sets_id, max(term), stem, sum(stem_count), date_trunc('day', min(publish_date)), null " .
-              "    from story_sentence_words ssw, media_sets_media_map msmm " .
+              "    from story_sentence_words_terms_stems ssw, media_sets_media_map msmm " .
               "    where date_trunc( 'day', ssw.publish_date ) = '${sql_date}'::date and " .
               "      ssw.media_id = msmm.media_id and $media_set_clause " . "    group by msmm.media_sets_id, ssw.stem " .
               "    having sum(ssw.stem_count) > 1" );
@@ -476,7 +556,7 @@ sub _update_daily_words
             "insert into daily_words (media_sets_id, term, stem, stem_count, publish_day, dashboard_topics_id) " .
               "  select msmm.media_sets_id, max(ssw.term), ssw.stem, sum(ssw.stem_count), " .
               "      date_trunc('day', min(ssw.publish_date)), ? " .
-              "    from story_sentence_words ssw, media_sets_media_map msmm, " . "      story_sentence_words sswq " .
+              "    from story_sentence_words_terms_stems ssw, media_sets_media_map msmm, " . "      story_sentence_words_terms_stems sswq " .
               "    where sswq.stories_id = ssw.stories_id and sswq.sentence_number = ssw.sentence_number and " .
               "      sswq.stem = ? and sswq.media_id = msmm.media_id and " .
               "      date_trunc( 'day', sswq.publish_date ) = ?::date and $media_set_clause " .

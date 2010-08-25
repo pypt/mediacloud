@@ -503,7 +503,7 @@ sub get_medium_day_sentences
     if ( $dashboard_topic )
     {
         return $c->dbis->query( "select distinct ss.publish_date, ss.stories_id, ss.sentence, s.url " .
-"  from story_sentences ss, story_sentence_words ssw, story_sentence_words sswq, stories s, dashboard_topics dt "
+"  from story_sentences ss, story_sentence_words_terms_and_stems ssw, story_sentence_words_terms_and_stems sswq, stories s, dashboard_topics dt "
               . "  where ss.stories_id = ssw.stories_id and ss.sentence_number = ssw.sentence_number "
               . "    and s.stories_id = ssw.stories_id and ssw.media_id = ? and ssw.stem = ? "
               . "    and date_trunc('day', ssw.publish_date) = ( ?::date + interval '$days days' ) "
@@ -516,7 +516,7 @@ sub get_medium_day_sentences
     else
     {
         return $c->dbis->query( "select distinct ss.publish_date, ss.stories_id, ss.sentence, s.url " .
-              "  from story_sentences ss, story_sentence_words ssw, stories s " .
+              "  from story_sentences ss, story_sentence_words_terms_and_stems ssw, stories s " .
               "  where ss.stories_id = ssw.stories_id and ss.sentence_number = ssw.sentence_number " .
               "    and s.stories_id = ssw.stories_id " . "    and ssw.media_id = ? " . "    and ssw.stem = ? " .
               "    and date_trunc('day', ssw.publish_date) = ( ?::date + interval '$days days' ) " .
@@ -537,7 +537,7 @@ sub get_medium_day_stories
     {
         $stories = $c->dbis->query(
             "select distinct ssw.stories_id, s.title, s.url, s.publish_date
-            from story_sentence_words ssw, story_sentence_words sswq, stories s, dashboard_topics dt
+            from story_sentence_words_terms_stems ssw, story_sentence_words_terms_stems sswq, stories s, dashboard_topics dt
             where ssw.media_id=? and ssw.stem=?
               and date_trunc('day', ssw.publish_date) = ( ?::date + interval '$days days' )
               and dt.dashboard_topics_id=?
@@ -554,7 +554,7 @@ sub get_medium_day_stories
     {
         $stories = $c->dbis->query(
             "select distinct ssw.stories_id, s.title, s.url, s.publish_date
-            from story_sentence_words ssw, stories s 
+            from story_sentence_words_terms_stems ssw, stories s 
             where ssw.media_id=? and ssw.stem=?
               and date_trunc('day', ssw.publish_date) = ( ?::date + interval '$days days' )
               and s.stories_id=ssw.stories_id
@@ -569,7 +569,7 @@ sub get_medium_day_stories
         my $id        = $story->{ stories_id };
         my $sentences = $c->dbis->query( "
             select distinct ss.sentence
-            from story_sentences ss, story_sentence_words ssw
+            from story_sentences ss, story_sentence_words_terms_stems ssw
             where ssw.stem=? and ss.stories_id=?
               and ss.stories_id=ssw.stories_id
               and ss.sentence_number=ssw.sentence_number
