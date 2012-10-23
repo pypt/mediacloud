@@ -2,6 +2,8 @@ package MediaWords::Controller::Api::Stories;
 use Modern::Perl "2012";
 use MediaWords::CommonLibs;
 
+use MediaWords::DBI::StorySubsets;
+
 use strict;
 use warnings;
 use base 'Catalyst::Controller';
@@ -10,6 +12,7 @@ use List::Util qw(first max maxstr min minstr reduce shuffle sum);
 use Moose;
 use namespace::autoclean;
 use List::Compare;
+use Carp;
 
 =head1 NAME
 
@@ -404,13 +407,22 @@ sub subset_PUT : Local
 
     my $story_subset = $c->dbis->create( 'story_subsets', $subset );
 
+    die unless defined( $story_subset );
+
+    $story_subset = $c->dbis->find_by_id( 'story_subsets', $story_subset->{ story_subsets_id } );
+
+    die unless defined( $story_subset );
+
+    MediaWords::DBI::StorySubsets::process( $c->dbis, $story_subset );
+
+    $story_subset = $c->dbis->find_by_id( 'story_subsets', $story_subset->{ story_subsets_id } );
+
     $self->status_created(
         $c,
         location => $c->req->uri->as_string,
         entity   => $story_subset,
     );
 
-    process_subset( $c->dbis, $story_subset );
 }
 
 sub subset_GET : Local
@@ -425,52 +437,6 @@ sub subset_GET : Local
         location => $c->req->uri->as_string,
         entity   => $story_subset,
     );
-
-}
-
-sub process_subset
-{
-    my ( $db, $st_subset ) = @_;
-
-    #build query
-
-    my $where_clause = " WHERE ";
-
-    my $query_map = {
-        'start_date'    => 'publish_date >= ?',
-        'end_date'      => 'publish_date <= ?',
-        'media_sets_id' => ' media_id in ( select media_id from media_sets_media_map where media_sets_id = ? ) ',
-    };
-
-    my $defined_clauses = [ grep { defined( $st_subset->{ $_ } ) } ( keys %{ $st_subset } ) ];
-
-    my $non_query_clauses = [ qw ( story_subsets_id ready last_process_stories_id ) ];
-
-    my $lc = List::Compare->new( $non_query_clauses, $defined_clauses );
-
-    my $subset_clauses = [ sort $lc->get_Ronly ];
-
-    my $where_clause = ' 1 = 1 ';
-
-    my $query_params = [];
-
-    push @{ $query_params }, $st_subset->{ story_subsets_id };
-
-    foreach my $clause ( @{ $subset_clauses } )
-    {
-        $where_clause .= 'and';
-        $where_clause .= $query_map->{ $clause };
-        push @{ $query_params }, $st_subset->{ $clause };
-    }
-
-    my $query =
-" INSERT INTO story_subsets_processed_stories_map( processed_stories_id , story_subsets_id ) SELECT processed_stories_id, ? from processed_stories natural join stories WHERE $where_clause ";
-
-    say STDERR $query;
-
-    $db->query( $query, @{ $query_params } );
-
-    $db->query( " UPDATE story_subsets set ready = 'true' where story_subsets_id = ?  ", $st_subset->{ story_subsets_id } );
 
 }
 
