@@ -1,58 +1,80 @@
-#!/usr/bin/env perl
+package MediaWords::CM::GuessDate;
 
-# Run through the sopa stories, trying to assign better date guesses
+# guess the date of a spidered story using a combination of the story url, html, and
+# a first guess date
 
 use strict;
 
-BEGIN
-{
-    use FindBin;
-    use lib "$FindBin::Bin/../lib";
-}
-
-use Data::Dumper;
 use DateTime;
 use Date::Parse;
-use HTML::TreeBuilder::XPath;
-use LWP::UserAgent;
+use HTML::TreeBuilder::LibXML;
 
+use MediaWords::CommonLibs;
+use MediaWords::CM::GuessDate;
 use MediaWords::DB;
 
 # each of the test dates in the $_date_guess_functions should resolve to this date
 my $_test_epoch_date = 1326819600;
 
-# threshhold of number of days a soft guess date can be off from the existing
+# threshhold of number of days a guess date can be off from the existing
 # story date without dropping the guess
-my $_soft_date_threshhold = 14;
+my $_date_guess_threshhold = 14;
 
-# only use the date from these guessing functions if the date is within $_soft_date_threshhold days
+# only use the date from these guessing functions if the date is within $_date_guess_threshhold days
 # of the existing date for the story
 my $_date_guess_functions = [
-    { function => \&guess_by_dc_date_issued, test => '<meta name="DC.date.issued" content="2012-01-17T12:00:00-05:00" />' },
     {
+        name     => 'guess_by_dc_date_issued',
+        function => \&guess_by_dc_date_issued,
+        test     => '<meta name="DC.date.issued" content="2012-01-17T12:00:00-05:00" />'
+    },
+    {
+        name     => 'guess_by_dc_created',
         function => \&guess_by_dc_created,
         test =>
 '<li property="dc:date dc:created" content="2012-01-17T12:00:00-05:00" datatype="xsd:dateTime" class="created">January 17, 2012</li>'
     },
     {
+        name     => 'guess_by_meta_publish_date',
         function => \&guess_by_meta_publish_date,
-        text     => '<meta name="item-publish-date" content="Tue, 17 Jan 2012 12:00:00 EST" />'
+        test     => '<meta name="item-publish-date" content="Tue, 17 Jan 2012 12:00:00 EST" />'
     },
-    { function => \&guess_by_storydate, test => '<p class="storydate">Tue, Jan 17th 2012</p>' },
     {
+        name     => 'guess_by_storydate',
+        function => \&guess_by_storydate,
+        test     => '<p class="storydate">Tue, Jan 17th 2012</p>'
+    },
+    {
+        name     => 'guess_by_datatime',
         function => \&guess_by_datatime,
         test     => '<span class="date" data-time="1326819600">Jan 17, 2012 12:00 pm EST</span>'
     },
     {
+        name     => 'guess_by_datetime_pubdate',
         function => \&guess_by_datetime_pubdate,
         test     => '<time datetime="2012-01-17" pubdate>Jan 17, 2012 12:00 pm EST</time>'
     },
-    { function => \&guess_by_url_and_date_text },
-    { function => \&guess_by_url },
-    { function => \&guess_by_class_date, test => '<p class="date">Jan 17, 2012</p>' },
     {
+        name     => 'guess_by_url_and_date_text',
+        function => \&guess_by_url_and_date_text
+    },
+    {
+        name     => 'guess_by_url',
+        function => \&guess_by_url
+    },
+    {
+        name     => 'guess_by_class_date',
+        function => \&guess_by_class_date,
+        test     => '<p class="date">Jan 17, 2012</p>'
+    },
+    {
+        name     => 'guess_by_date_text',
         function => \&guess_by_date_text,
         test     => '<p>foo bar</p><p class="dateline>published on Jan 17th, 2012, 12:00 PM EST'
+    },
+    {
+        name     => 'guess_by_existing_story_date',
+        function => \&guess_by_existing_story_date,
     },
 ];
 
@@ -149,13 +171,16 @@ sub guess_by_url
 {
     my ( $story, $html, $xpath ) = @_;
 
-    if ( ( $story->{ url } =~ m~(20\d\d)/(\d\d)/(\d\d)~ ) || ( $story->{ redirect_url } =~ m~(20\d\d)/(\d\d)/(\d\d)~ ) )
+    my $url = $story->{ url };
+    my $redirect_url = $story->{ redirect_url } || $url;
+
+    if ( ( $url =~ m~(20\d\d)/(\d\d)/(\d\d)~ ) || ( $redirect_url =~ m~(20\d\d)/(\d\d)/(\d\d)~ ) )
     {
         my $date = validate_date_parts( $1, $2, $3 );
         return $date if ( $date );
     }
 
-    if ( ( $story->{ url } =~ m~/(20\d\d)(\d\d)(\d\d)/~ ) || ( $story->{ redirect_url } =~ m~(20\d\d)(\d\d)(\d\d)~ ) )
+    if ( ( $url =~ m~/(20\d\d)(\d\d)(\d\d)/~ ) || ( $redirect_url =~ m~(20\d\d)(\d\d)(\d\d)~ ) )
     {
         return validate_date_parts( $1, $2, $3 );
     }
@@ -215,25 +240,14 @@ sub guess_by_url_and_date_text
     }
 }
 
-# get the html for the story.  while downloads are not available, redownload the story.
-sub get_story_html
+# just return the existing publish_date of the story.
+# this is useful as a last resort so that we can keep
+# track of the 'guess_by_existing_story_date' method
+sub guess_by_existing_story_date
 {
-    my ( $db, $story ) = @_;
+    my ( $story, $html, $xpath ) = @_;
 
-    my $url = $story->{ redirect_url } || $story->{ url };
-
-    my $ua = LWP::UserAgent->new;
-
-    my $response = $ua->get( $url );
-
-    if ( $response->is_success )
-    {
-        return $response->decoded_content;
-    }
-    else
-    {
-        return undef;
-    }
+    return $story->{ publish_date };
 }
 
 # if the date is exactly midnight, round it to noon because noon is a better guess of the publication time
@@ -259,9 +273,13 @@ sub make_epoch_date
 {
     my ( $date ) = @_;
 
+    return undef unless ( $date );
+
     return $date if ( $date =~ /^\d+$/ );
 
     my $epoch = Date::Parse::str2time( $date, 'EST' );
+
+    return undef unless ( $epoch );
 
     $epoch = round_midnight_to_noon( $epoch );
 
@@ -274,12 +292,12 @@ sub make_epoch_date
     return $epoch;
 }
 
-# get HTML::TreeBuilder::XPath object representing the html
+# get HTML::TreeBuilder::LibXML object representing the html
 sub get_xpath
 {
     my ( $html ) = @_;
 
-    my $xpath = HTML::TreeBuilder::XPath->new;
+    my $xpath = HTML::TreeBuilder::LibXML->new;
     $xpath->ignore_unknown( 0 );
     $xpath->parse_content( $html );
 
@@ -289,11 +307,7 @@ sub get_xpath
 # guess the date for the story by cycling through the $_date_guess_functions one at a time.  return the date in epoch format.
 sub guess_date
 {
-    my ( $db, $story ) = @_;
-
-    my $html = get_story_html( $db, $story );
-
-    return undef if ( !$html );
+    my ( $db, $story, $html, $use_threshold ) = @_;
 
     my $xpath = get_xpath( $html );
 
@@ -303,33 +317,16 @@ sub guess_date
     {
         if ( my $date = make_epoch_date( $date_guess_function->{ function }->( $story, $html, $xpath ) ) )
         {
-            return $date if ( ( $date - $story_epoch_date ) < ( $_soft_date_threshhold * 86400 ) );
+            if ( $use_threshold && ( abs( $date - $story_epoch_date ) < ( $_date_guess_threshhold * 86400 ) ) )
+            {
+                next;
+            }
+            my $epoch_date = DateTime->from_epoch( epoch => $date )->datetime;
+            return wantarray ? ( $date_guess_function->{ name }, $epoch_date ) : $epoch_date;
         }
     }
 
     return undef;
-}
-
-# guess the date for the story and update it in the db
-sub fix_date
-{
-    my ( $db, $story ) = @_;
-
-    my $date = guess_date( $db, $story );
-
-    my $date_string;
-    if ( $date )
-    {
-        $date_string = DateTime->from_epoch( epoch => $date )->datetime;
-        $db->query( "update stories set publish_date =  ? where stories_id = ?", $date_string, $story->{ stories_id } );
-    }
-    else
-    {
-        $date_string = '(no guess)';
-    }
-
-    print "$story->{ url }\t$story->{ publish_date }\t$date_string\n";
-
 }
 
 # test each date parser
@@ -355,34 +352,4 @@ sub test_date_parsers
     }
 }
 
-# get all sopa stories
-sub get_sopa_stories
-{
-    my ( $db ) = @_;
-
-    my $stories = $db->query(
-        "select distinct s.*, ss.redirect_url, md5( ( s.stories_id + 1 )::text ) from stories s, sopa_stories ss " .
-          "  where s.stories_id = ss.stories_id " . "    and s.stories_id in " .
-"      ( ( select stories_id from sopa_links_cross_media ) union ( select ref_stories_id from sopa_links_cross_media ) ) "
-          .
-
-          #        "  order by md5( ( s.stories_id + 1 )::text ) limit 100"
-          "  order by stories_id "
-    )->hashes;
-
-    return $stories;
-}
-
-sub main
-{
-    test_date_parsers();
-
-    my $db = MediaWords::DB::connect_to_db;
-
-    my $stories = get_sopa_stories( $db );
-
-    map { fix_date( $db, $_ ) } @{ $stories };
-
-}
-
-main();
+1;
