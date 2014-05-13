@@ -18,8 +18,9 @@
 
 [% END #IF dashboard_topic %]
 <link href="[% c.uri_for('/include/smoothness/jquery-ui-1.8.5.custom.css') %]" rel="stylesheet" type="text/css"/>
-<script type="text/javascript" src="[% c.uri_for('/include/jquery-1.4.3.js') %]"></script>
-<script type="text/javascript" src="[% c.uri_for('/include/jquery-ui-1.8.5.custom.min.js') %]"></script>
+<script type="text/javascript" src="[% c.uri_for('/script/jquery-1.11.1.min.js') %]"></script>
+<script type="text/javascript" src="[% c.uri_for('/script/jquery-migrate-1.2.1.js') %]"></script>
+<script type="text/javascript" src="[% c.uri_for('/script/jquery-ui-1.10.4.min.js') %]"></script>
 
 <script>
     window.onload = function ()
