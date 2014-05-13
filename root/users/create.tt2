@@ -12,14 +12,18 @@
     // Enable / disable the password fields based on checkbox value
     function showOrHidePasswordInputFields(password_chosen_by_user)
     {
-        if (password_chosen_by_user) {
-            $("fieldset#createUser div.password label").css("color", "#999");
-            $("fieldset#createUser div.password input").attr("readonly", "readonly")
-                                                       .attr("placeholder", "");
+        if (password_chosen_by_user === true /* checked */ || password_chosen_by_user === undefined /* page just loaded */) {
+            $("fieldset#createUser label[for='password']").css("color", "#999");
+            $("fieldset#createUser label[for='password_repeat']").css("color", "#999");
+            $("fieldset#createUser input#password").attr("readonly", "readonly");
+            $("fieldset#createUser input#password_repeat").attr("readonly", "readonly");
         } else {
-            $("fieldset#createUser div.password label").css("color", "inherit");
-            $("fieldset#createUser div.password input").attr("readonly", "")
-                                                       .attr("placeholder", "correct horse battery staple");
+            $("fieldset#createUser label[for='password']").css("color", "inherit");
+            $("fieldset#createUser label[for='password_repeat']").css("color", "inherit");
+            $("fieldset#createUser input#password").removeAttr("readonly");
+            $("fieldset#createUser input#password_repeat").removeAttr("readonly");
+
+            $("fieldset#createUser input#password").focus();
         }    
     }
 
@@ -28,7 +32,7 @@
         // Validate login form -- select empty form fields
         $("fieldset#createUser form").validate();
 
-        showOrHidePasswordInputFields($("#password_chosen_by_user").attr("checked"));
+        showOrHidePasswordInputFields($("#password_chosen_by_user").checked);
         $("#password_chosen_by_user").change(function() {
             showOrHidePasswordInputFields(this.checked);
         });
