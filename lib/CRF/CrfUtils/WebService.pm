@@ -75,17 +75,12 @@ sub create_model($$$)
     _fatal_error( "Not implemented in " . __PACKAGE__ );
 }
 
-sub run_model($$$$)
-{
-    my ( $class, $model_file_name, $test_data_file, $output_fhs ) = @_;
-
-    # Clients should use CRF::CrfUtils::InlineJava directly
-    _fatal_error( "Not implemented in " . __PACKAGE__ );
-}
-
 sub run_model_inline_java_data_array($$$)
 {
     my ( $class, $model_file_name, $test_data_array ) = @_;
+
+    _fatal_error(
+        "CRF Webservice is disabled because it does not support probability results which are now required by CrfUtils." );
 
     _validate_model_file_name( $model_file_name );
 

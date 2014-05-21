@@ -83,13 +83,6 @@ sub create_model($$$)
     return _create_model_inline_java( $class, $training_data_file, $iterations );
 }
 
-sub run_model($$$$)
-{
-    my ( $class, $model_file_name, $test_data_file, $output_fhs ) = @_;
-
-    return _run_model_inline_java( $class, $model_file_name, $test_data_file, $output_fhs );
-}
-
 sub run_model_inline_java_data_array($$$)
 {
     my ( $class, $model_file_name, $test_data_array ) = @_;
@@ -167,34 +160,34 @@ sub _run_model_on_array($$$)
 
     # Returning and using a single string from a Java method is way faster than
     # returning and using an array of strings
-    my $results_string = $modelrunner->runModelStringReturnString( $test_data );
+    my $crf_results = $modelrunner->runModelString( $test_data );
 
-    my $results = [ split( "\n", $results_string ) ];
+    my $results = [];
+
+    use Inline::Java qw(cast);
+
+    for my $crf_result ( @$crf_results )
+    {
+        #say STDERR Dumper( $crf_result );
+
+        my $prediction          = $crf_result->{ prediction };
+        my $probability_entries = $crf_result->{ probabilities }->entrySet()->toArray();
+
+        my @probabilities =
+          map { cast( 'java.util.Map$Entry', $_ )->getKey() => cast( 'java.util.Map$Entry', $_ )->getValue() }
+          @{ $probability_entries };
+
+        my $result = {
+            prediction    => $prediction,
+            probabilities => { @probabilities },
+        };
+
+        say STDERR Dumper( $result );
+
+        push $results, $result;
+    }
 
     return $results;
-}
-
-sub _run_model_inline_java($$$$)
-{
-    my ( $class, $model_file_name, $test_data_file, $output_fhs ) = @_;
-
-    my $probabilities_fh = $output_fhs->{ probabilities_fh };
-
-    my $predictions_fh = $output_fhs->{ predictions_fh };
-
-    my $expected_results_fh = $output_fhs->{ expected_results_fh };
-
-    say STDERR "generating predictions";
-
-    say STDERR "classpath: $class_path";
-
-    my @test_data_array = read_file( $test_data_file );
-
-    my $foo = run_model_inline_java_data_array( $class, $model_file_name, \@test_data_array );
-
-    say join "\n", @{ $foo };
-
-    exit();
 }
 
 sub _crf_modelrunner_java_src()

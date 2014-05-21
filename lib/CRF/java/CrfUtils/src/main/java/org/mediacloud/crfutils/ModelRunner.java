@@ -37,31 +37,25 @@ public class ModelRunner {
         p.getDataAlphabet().stopGrowth();
     }
 
-    public String[] runModel(String testFileName) throws Exception {
+    private CrfOutput[] runModel(String testFileName) throws Exception {
 
         InstanceList testData = readTestData(testFileName);
-        return crfOutputsToStrings(runCrfModel(testData));
+        return runCrfModel(testData);
     }
 
-    public String runModelReturnString(String testFileName) throws Exception {
-
-        String[] results = runModel(testFileName);
-        return joinArrayToString("\n", results);
-    }
-
-    public String[] runModelString(String testDataString) throws Exception {
+    public CrfOutput[] runModelString(String testDataString) throws Exception {
 
         InstanceList testData = readTestDataFromString(testDataString);
-        return crfOutputsToStrings(runCrfModel(testData));
+        return runCrfModel(testData);
     }
 
     public String runModelStringReturnString(String testDataString) throws Exception {
 
-        String[] results = runModelString(testDataString);
+        String[] results = crfOutputsToStrings(runModelString(testDataString));
         return joinArrayToString("\n", results);
     }
 
-    private ArrayList<CrfOutput> runCrfModel(InstanceList testData) {
+    private CrfOutput[] runCrfModel(InstanceList testData) {
 
         /*
          Runtime rt = Runtime.getRuntime();
@@ -72,22 +66,19 @@ public class ModelRunner {
          System.err.println("Max Memory: " + rt.maxMemory() / 1024 + " KB");
          System.err.println("");
          */
-        ArrayList<String> results = new ArrayList<String>();
 
-         if ( testData.size() >  1) {
+        if ( testData.size() >  1) {
              throw new IllegalArgumentException("test data may only contain one sequence");
          }
 
         Sequence input = (Sequence) testData.get(0).getData();
 
-        ArrayList<CrfOutput> crfResults = predictSequence(input);
-
-        return crfResults;
+        return predictSequence(input);
 
         //return crfOutputsToStrings(crfResults);
     }
 
-    private String[] crfOutputsToStrings(ArrayList<CrfOutput> crfResults) {
+    String[] crfOutputsToStrings(CrfOutput[] crfResults) {
         ArrayList<String> sequenceResults = new ArrayList<String>();
 
         for ( CrfOutput crfResult: crfResults )
@@ -95,7 +86,7 @@ public class ModelRunner {
             sequenceResults.add( crfResult.prediction + " ");
         }
 
-        return sequenceResults.toArray(new String[0]);
+        return sequenceResults.toArray(new String[sequenceResults.size()]);
     }
 
     private InstanceList readTestData(String testFileName) throws FileNotFoundException {
@@ -121,12 +112,12 @@ public class ModelRunner {
         return testData;
     }
 
-    class CrfOutput {
+    public class CrfOutput {
         public String prediction;
         public HashMap<String, Double> probabilities;
     };
 
-    private ArrayList<CrfOutput> predictSequence(Sequence input) {
+    private CrfOutput[] predictSequence(Sequence input) {
 
         // That's how SimpleTagger.apply() implements it
         Sequence output = crf.transduce(input);
@@ -137,7 +128,7 @@ public class ModelRunner {
             }
         } catch (RuntimeException e) {
             System.err.println("Exception: " + e.getMessage());
-            return new ArrayList<CrfOutput>();
+            return new CrfOutput[0];
         }
 
          SumLattice lattice = new SumLatticeDefault(crf,input);
@@ -175,7 +166,7 @@ public class ModelRunner {
 
         }
 
-        return crfResults;
+        return crfResults.toArray( new CrfOutput[0] );
     }
 
     private static String joinArrayToString(String glue, String[] array) {

@@ -3,7 +3,6 @@ use Modern::Perl "2013";
 use MediaWords::CommonLibs;
 
 use MediaWords::DBI::StorySubsets;
-use MediaWords::Controller::Api::V2::MC_Action_REST;
 use strict;
 use warnings;
 use base 'Catalyst::Controller';
@@ -33,6 +32,8 @@ Catalyst Controller.
 
 BEGIN { extends 'MediaWords::Controller::Api::V2::MC_REST_SimpleObject' }
 
+__PACKAGE__->config( action_roles => [ 'NonPublicApiKeyAuthenticated' ], );
+
 use MediaWords::Tagger;
 
 sub get_table_name
@@ -40,7 +41,7 @@ sub get_table_name
     return "story_sentences";
 }
 
-sub list : Local : ActionClass('+MediaWords::Controller::Api::V2::MC_Action_REST')
+sub list : Local : Does('~NonPublicApiKeyAuthenticated') : Does('~Throttled') : Does('~Logged')
 {
 }
 
@@ -127,7 +128,7 @@ sub list_GET : Local
 {
     my ( $self, $c ) = @_;
 
-    say STDERR "starting list_GET";
+    # say STDERR "starting list_GET";
 
     my $params = {};
 
@@ -160,7 +161,7 @@ sub list_GET : Local
 }
 
 ##TODO merge with stories put_tags
-sub put_tags : Local : ActionClass('+MediaWords::Controller::Api::V2::MC_Action_REST')
+sub put_tags : Local : Does('~NonPublicApiKeyAuthenticated') : Does('~Throttled') : Does('~Logged')
 {
 }
 
