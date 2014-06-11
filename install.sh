@@ -16,7 +16,7 @@ if [ ! -f mediawords.yml ]; then
     cp mediawords.yml.dist mediawords.yml
 fi
 
-sudo ./install_scripts/install_mediacloud_package_dependencies.sh
+./install_scripts/install_mediacloud_package_dependencies.sh
 ./install_mc_perlbrew_and_modules.sh
 ./python_scripts/pip_installs.sh
 
@@ -40,6 +40,7 @@ echo "creating new user 'jdoe@mediacloud.org' with password 'mediacloud'"
     --full_name="John Doe" \
     --notes="Media Cloud administrator" \
     --roles="admin" \
+    --non_public_api_access \
     --password="mediacloud"
 
 echo "Setting up Git pre-commit hooks..."

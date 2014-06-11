@@ -31,11 +31,19 @@ Catalyst Controller.
 
 BEGIN { extends 'MediaWords::Controller::Api::V2::MC_Controller_REST' }
 
+# Default authentication action roles
+__PACKAGE__->config(    #
+    action => {         #
+        single => { Does => [ qw( ~PublicApiKeyAuthenticated ~Throttled ~Logged ) ] },    #
+        list   => { Does => [ qw( ~PublicApiKeyAuthenticated ~Throttled ~Logged ) ] },    #
+      }    #
+);         #
+
 use constant ROWS_PER_PAGE => 20;
 
 use MediaWords::Tagger;
 
-sub _purge_extra_fields :
+sub _purge_extra_fields
 {
     my ( $self, $obj ) = @_;
 
@@ -56,7 +64,7 @@ sub _purge_extra_fields_obj_list
     return [ map { $self->_purge_extra_fields( $_ ) } @{ $list } ];
 }
 
-sub _purge_non_permissible_fields :
+sub _purge_non_permissible_fields
 {
     my ( $self, $obj ) = @_;
 
@@ -140,7 +148,7 @@ sub _process_result_list
     return $items;
 }
 
-sub single : Local : ActionClass('REST') : Does('~PublicApiKeyAuthenticated') : Does('~Throttled') : Does('~Logged')
+sub single : Local : ActionClass('REST')    # action roles are to be set for each derivative sub-actions
 {
 }
 
@@ -176,11 +184,39 @@ sub list_api_requires_filter_field
     return defined( $self->list_query_filter_field() ) && $self->list_query_filter_field();
 }
 
+sub list_name_search_field
+{
+    return;
+}
+
+sub _get_name_search_clause
+{
+    my ( $self, $c ) = @_;
+
+    my $name_clause = '';
+
+    my $name_field = $self->list_name_search_field;
+
+    return '' unless ( $name_field );
+
+    my $name_val = $c->req->params->{ $name_field };
+
+    return '' unless ( $name_val );
+
+    return 'and false' unless ( length( $name_val ) > 2 );
+
+    my $q_name_val = $c->dbis->dbh->quote( $name_val );
+
+    return "and $name_field ilike '%' || $q_name_val || '%'";
+}
+
 sub _fetch_list
 {
     my ( $self, $c, $last_id, $table_name, $id_field, $rows ) = @_;
 
     my $list;
+
+    my $name_clause = $self->_get_name_search_clause( $c );
 
     if ( $self->list_api_requires_filter_field() )
     {
@@ -194,13 +230,13 @@ sub _fetch_list
         }
 
         my $query =
-          "select * from $table_name where $id_field > ? and $query_filter_field_name = ? ORDER by $id_field asc limit ? ";
+"select * from $table_name where $id_field > ? $name_clause and $query_filter_field_name = ? ORDER by $id_field asc limit ? ";
 
         $list = $c->dbis->query( $query, $last_id, $filter_field_value, $rows )->hashes;
     }
     else
     {
-        my $query = "select * from $table_name where $id_field > ? ORDER by $id_field asc limit ? ";
+        my $query = "select * from $table_name where $id_field > ? $name_clause ORDER by $id_field asc limit ? ";
 
         $list = $c->dbis->query( $query, $last_id, $rows )->hashes;
     }
@@ -221,7 +257,7 @@ sub _get_list_last_id_param_name
     return $last_id_param_name;
 }
 
-sub list : Local : ActionClass('REST') : Does('~PublicApiKeyAuthenticated') : Does('~Throttled') : Does('~Logged')
+sub list : Local : ActionClass('REST')    # action roles are to be set for each derivative sub-actions
 {
 }
 
@@ -250,15 +286,7 @@ sub list_GET : Local
 
     # say STDERR "rows $rows";
 
-    my $list;
-
-    eval { $list = $self->_fetch_list( $c, $last_id, $table_name, $id_field, $rows ); };
-
-    if ( $@ )
-    {
-        $self->status_bad_request( $c, message => $@ );
-        return;
-    }
+    my $list = $self->_fetch_list( $c, $last_id, $table_name, $id_field, $rows );
 
     $list = $self->_process_result_list( $c, $list, $all_fields );
 
@@ -269,12 +297,19 @@ sub _die_unless_tag_set_matches_user_email
 {
     my ( $self, $c, $tags_id ) = @_;
 
-    Readonly my $query => "SELECT tag_sets.name from tags natural join tag_sets where tags_id = ? limit 1 ";
+    Readonly my $query =>
+      "SELECT tag_sets.name from tags, tag_sets where tags.tag_sets_id = tag_sets.tag_sets_id AND tags_id = ? limit 1 ";
 
-    my $tag_set = $c->dbis->query( $query, $tags_id )->hashes->[ 0 ]->{ name };
+    my $hashes = $c->dbis->query( $query, $tags_id )->hashes();
+
+    #say STDERR "Hashes:\n" . Dumper( $hashes );
+
+    my $tag_set = $hashes->[ 0 ]->{ name };
+
+    die "Undefined tag_set for tags_id: $tags_id" unless defined( $tag_set );
 
     die "Illegal tag_set name '$tag_set', tag_set must be user email "
-      unless $c->stash->{ auth_user }->{ email } eq $tag_set;
+      unless $c->stash->{ api_auth }->{ email } eq $tag_set;
 }
 
 sub _get_tags_id
@@ -292,8 +327,13 @@ sub _get_tags_id
 
         my ( $tag_set, $tag_name ) = split ':', $tag_string;
 
-        die "Illegal tag_set name '$tag_set', tag_set must be user email "
-          unless $c->stash->{ auth_user }->{ email } eq $tag_set;
+        #say STDERR Dumper( $c->stash );
+        my $user_email = $c->stash->{ api_auth }->{ email };
+
+        if ( $user_email ne $tag_set )
+        {
+            die "Illegal tag_set name '" . $tag_set . "' tag_set must be user email ( '$user_email' ) ";
+        }
 
         my $tag_sets = $c->dbis->query( "SELECT * from tag_sets where name = ?", $tag_set )->hashes;
 
@@ -335,9 +375,44 @@ sub _get_tags_id
     return;
 }
 
+# given a hash in the form { $id => [ $tags_id, ... ] }, for each
+# distinct tag_set associated with the listed tags for a story/sentence, clear
+# all other tags in that tag set from the story/sentence
+sub _clear_tags
+{
+    my ( $self, $c, $tags_map ) = @_;
+
+    my $tags_map_table = $self->get_table_name() . '_tags_map';
+    my $table_id_name  = $self->get_table_name() . '_id';
+
+    while ( my ( $id, $tags_ids ) = each( %{ $tags_map } ) )
+    {
+        my $tags_ids_list = join( ',', @{ $tags_ids } );
+        $c->dbis->query( <<END, $id );
+delete from $tags_map_table stm
+    using tags keep_tags, tags delete_tags
+    where
+        keep_tags.tags_id in ( $tags_ids_list ) and
+        keep_tags.tag_sets_id = delete_tags.tag_sets_id and
+        delete_tags.tags_id not in ( $tags_ids_list ) and
+        stm.tags_id = delete_tags.tags_id and
+        stm.$table_id_name = ?
+END
+    }
+}
+
+# add tags from the $story_tags list in the form '<id>,<tag_set>:<tag>'
+# to the given story or sentence.  if $c->req->param( 'clear_tags' ) is true,
+# for each combination of id and tag_set, clear all tags not
+# assigned in this request
 sub _add_tags
 {
     my ( $self, $c, $story_tags ) = @_;
+
+    my $clear_tags_map = {};
+
+    my $tags_map_table = $self->get_table_name() . '_tags_map';
+    my $table_id_name  = $self->get_table_name() . '_id';
 
     foreach my $story_tag ( @$story_tags )
     {
@@ -351,14 +426,27 @@ sub _add_tags
 
         # say STDERR "$id, $tags_id";
 
-        my $tags_map_table = $self->get_table_name() . '_tags_map';
-        my $table_id_name  = $self->get_table_name() . '_id';
-
-        my $query = "INSERT INTO $tags_map_table ( $table_id_name, tags_id) VALUES (?, ? )";
+        my $query = <<END;
+INSERT INTO $tags_map_table ( $table_id_name, tags_id) 
+    select \$1, \$2
+        where not exists (
+            select 1 
+                from $tags_map_table 
+                where $table_id_name = \$1 and
+                    tags_id = \$2
+        )
+END
 
         # say STDERR $query;
 
         $c->dbis->query( $query, $id, $tags_id );
+
+        push( @{ $clear_tags_map->{ $id } }, $tags_id );
+    }
+
+    if ( $c->req->params->{ clear_tags } )
+    {
+        $self->_clear_tags( $c, $clear_tags_map );
     }
 }
 

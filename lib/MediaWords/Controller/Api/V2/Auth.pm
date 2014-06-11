@@ -19,7 +19,13 @@ use namespace::autoclean;
 
 BEGIN { extends 'MediaWords::Controller::Api::V2::MC_Controller_REST' }
 
-sub single : Local : ActionClass('REST') : Does('~PublicApiKeyAuthenticated') : Does('~Throttled') : Does('~Logged')
+__PACKAGE__->config(    #
+    action => {         #
+        single => { Does => [ qw( ~NonPublicApiKeyAuthenticated ~Throttled ~Logged ) ] },    #
+      }    #
+);         #
+
+sub single : Local : ActionClass('REST')
 {
 }
 
@@ -36,7 +42,7 @@ sub _login
 
     return 0 unless ( MediaWords::DBI::Auth::password_hash_is_valid( $user->{ password_hash }, $password ) );
 
-    return 0 unless ( grep { $_ =~ /^admin|admin-readonly|stories-api|public-api$/ } @{ $user->{ roles } } );
+    # return 0 unless ( grep { $_ =~ /^admin|admin-readonly|stories-api|public-api$/ } @{ $user->{ roles } } );
 
     return $user;
 

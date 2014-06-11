@@ -75,6 +75,12 @@ sub create : Local
         return;
     }
 
+    if ( $c->req->params->{ preview } )
+    {
+        $c->res->redirect( $c->uri_for( '/search', { q => $c_solr_seed_query, pattern => $c_pattern } ) );
+        return;
+    }
+
     my $controversy = {
         name            => $c_name,
         pattern         => $c_pattern,

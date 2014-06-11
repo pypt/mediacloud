@@ -15,22 +15,50 @@ use Modern::Perl "2013";
 use MediaWords::CommonLibs;
 
 use MediaWords::Util::Config;
+use HTTP::Status qw(:constants);
 
-before execute => sub {
-    my ( $self, $controller, $c ) = @_;
+around execute => sub {
 
-    # Check API key
-    my $allow_unauth = MediaWords::Util::Config::get_config->{ mediawords }->{ allow_unauthenticated_api_requests } || 'no';
-    if ( $allow_unauth ne 'yes' )
-    {
-        my ( $user_email, $user_roles ) = $self->_user_email_and_roles( $c );
-        unless ( $user_email and $user_roles )
+    my $orig = shift;
+    my $self = shift;
+    my ( $controller, $c ) = @_;
+
+    eval {
+        # Check API key
+        my $allow_unauth =
+          MediaWords::Util::Config::get_config->{ mediawords }->{ allow_unauthenticated_api_requests } || 'no';
+        if ( $allow_unauth ne 'yes' )
         {
-            $controller->status_forbidden( $c, message => 'Invalid API key. Access denied.' );
-            $c->detach();
-            return;
+            my ( $user_email, $user_roles ) = $self->_user_email_and_roles( $c );
+            unless ( $user_email and $user_roles )
+            {
+                $c->response->status( HTTP_FORBIDDEN );
+                die 'Invalid API key or authentication cookie. Access denied.';
+            }
+
+            my $user_info = MediaWords::DBI::Auth::user_info( $c->dbis, $user_email );
+
+            #say STDERR Dumper( $user_info );
+
+            if ( !$user_info->{ non_public_api } )
+            {
+                #say STDERR "non public api access denied";
+                $c->response->status( HTTP_FORBIDDEN );
+
+                die 'Your API key does not allow access to this URL. Access denied.';
+            }
         }
+    };
+    if ( $@ )
+    {
+        my $message = $@;
+
+        $c->error( 'Authentication error: ' . $@ );
+        $c->detach();
+        return undef;
     }
+
+    return $self->$orig( @_ );
 };
 
 1;

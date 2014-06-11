@@ -1,5 +1,4 @@
 % Media Cloud API Version 2
-% David Larochelle
 %
 
 #API URLs
@@ -58,50 +57,22 @@ Response:
     "name": "New York Times",
     "media_id": 1,
     "media_source_tags": [
-      {
-        "tags_id": 1,
-        "tag_sets_id": 1,
-        "tag_set": "media_type",
-        "tag": "newspapers"
-      },
-      {
-        "tag_sets_id": 3,
-        "tag_set": "usnewspapercirculation",
-        "tag": "3",
-        "tags_id": 109
-      },
-      {
-        "tags_id": 6071565,
-        "tag_sets_id": 17,
-        "tag_set": "word_cloud",
-        "tag": "include"
-      },
-      {
-        "tag": "default",
-        "tag_set": "word_cloud",
-        "tag_sets_id": 17,
-        "tags_id": 6729599
-      },
-      {
-        "tag": "adplanner_english_news_20090910",
-        "tag_set": "collection",
-        "tag_sets_id": 5,
-        "tags_id": 8874930
-      },
-      {
-        "tag_sets_id": 5,
-        "tag_set": "collection",
-        "tag": "ap_english_us_top25_20100110",
-        "tags_id": 8875027
-      }
-    ],
+     {
+       "tag_sets_id": 5,
+       "show_on_stories": null,
+       "tags_id": 8875027,
+       "show_on_media": 1,
+       "description": "Top U.S. mainstream media according Google Ad Planner's measure of unique monthly users.",
+       "tag_set": "collection",
+       "tag": "ap_english_us_top25_20100110",
+       "label": "U.S. Mainstream Media"
+     },
     "media_sets": [
       {
-        "set_type": "medium",
-        "media_sets_id": 24,
-        "name": "New York Times",
-        "description": null
-      }
+        "media_sets_id": 1,
+        "name": "Top 25 Mainstream Media",
+        "description": "Top 25 mainstream media sources by monthly unique users from the U.S. according to the Google AdPlanner service."
+      },
     ]
   }
 ]
@@ -120,6 +91,10 @@ Response:
 | --------------- | ------- | -----------------------------------------------------------------
 | `last_media_id` | 0       | Return media sources with a `media_id` greater than this value
 | `rows`          | 20      | Number of media sources to return. Cannot be larger than 100
+| `name`          | none    | Name of media source for which to search
+
+If the name parameter is specified, the call returns only media sources that match a case insensitive search 
+specified value.  If the specified value is less than 3 characters long, the call returns an empty list.
 
 #### Example
 
@@ -527,14 +502,30 @@ navigational snippets wrongly included in the extracted text by the extractor al
 
 #### Query Parameters
 
-| Parameter | Default | Notes
-| --------- | ---------------- | ----------------------------------------------------------------
-| `q`       | n/a              | `q` ("query") parameter which is passed directly to Solr
-| `fq`      | `null`           | `fq` ("filter query") parameter which is passed directly to Solr
+| Parameter          | Default          | Notes
+| ------------------ | ---------------- | ----------------------------------------------------------------
+| `q`                | n/a              | `q` ("query") parameter which is passed directly to Solr
+| `fq`               | `null`           | `fq` ("filter query") parameter which is passed directly to Solr
+| `split`            | `null`           | if set to 1 or true, split the counts into date ranges
+| `split_start_date` | `null`           | date on which to start date splits, in YYYY-MM-DD format
+| `split_end_date`   | `null`           | date on which to end date splits, in YYYY-MM-DD format
 
-These parameters are passed directly through to Solr (see description of q and fq parameters in api/v2/stories_public/list section above).
+The q and fq parameters are passed directly through to Solr (see description of q and fq parameters in api/v2/stories_public/list section above).
 
 The call returns the number of sentences returned by Solr for the specified query.
+
+If split is specified, split the counts into regular date ranges for dates between split\_start\_date and split\_end\_date. 
+The number of days in each date range depends on the total number of days between split\_start\_date and split\_end\_date:
+
+| Total Days | Days in each range
+| ---------- | ------------------
+| < 15       | 1 day
+| < 45       | 3 days
+| < 105      | 7 days
+| >= 105     | 1 month
+
+Note that the total count returned by a split query is for all sentences found by the solr query, which query might or might not
+include a date restriction.  So in the example africa query below, the 236372 count is for all sentences matching africa, not just those within the split date range.
 
 #### Example
 
@@ -548,11 +539,36 @@ URL: https://api.mediacloud.org/api/v2/sentences/count?q=sentence:obama&fq=media
 }
 ```
 
+Count sentences containing 'africa' in the U.S. Mainstream Media from 2014-01-01 to 2014-03-01:
+
+URL: https://api.mediacloud.org/api/v2/sentences/count?q=sentence:africa+AND+tags\_id\_media:8875027&split=1&split\_start\_date=2014-01-01&split\_end\_date=2014-03-01
+
+```json
+{
+  "count": 236372,
+  "split":
+  {
+    "2014-01-01T00:00:00Z": 650,
+    "2014-01-08T00:00:00Z": 900,
+    "2014-01-15T00:00:00Z": 999,
+    "2014-01-22T00:00:00Z": 1047,
+    "2014-01-29T00:00:00Z": 1125,
+    "2014-02-05T00:00:00Z": 946,
+    "2014-02-12T00:00:00Z": 1126
+    "2014-02-19T00:00:00Z": 1094,
+    "2014-02-26T00:00:00Z": 1218,
+    "gap": "+7DAYS",
+    "end": "2014-03-05T00:00:00Z",
+    "start": "2014-01-01T00:00:00Z",
+    }
+}
+````
+
 ## Word Counting
 
 ### api/v2/wc/list
 
-Returns word frequency counts of the 5000 most commwords in all sentences returned by 
+Returns word frequency counts of the most commwords in all sentences returned by 
 querying Solr using the `q` and `fq` parameters, with stopwords removed.  Words are stemmed
 before being counted.  For each word, the call returns the stem and the full term most used 
 with the given stem (for example, in the below example, 'romnei' is the stem that appeared 

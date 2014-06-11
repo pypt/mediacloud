@@ -6,12 +6,15 @@ use MediaWords::DBI::StorySubsets;
 use strict;
 use warnings;
 use base 'Catalyst::Controller';
+
+use Carp;
+use Date::Calc;
 use JSON;
 use List::Util qw(first max maxstr min minstr reduce shuffle sum);
 use Moose;
 use namespace::autoclean;
 use List::Compare;
-use Carp;
+
 use MediaWords::Solr;
 
 =head1 NAME
@@ -32,7 +35,14 @@ Catalyst Controller.
 
 BEGIN { extends 'MediaWords::Controller::Api::V2::MC_REST_SimpleObject' }
 
-__PACKAGE__->config( action_roles => [ 'NonPublicApiKeyAuthenticated' ], );
+__PACKAGE__->config(    #
+    action => {         #
+        single => { Does => [ qw( ~NonPublicApiKeyAuthenticated ~Throttled ~Logged ) ] },  # overrides "MC_REST_SimpleObject"
+        list   => { Does => [ qw( ~NonPublicApiKeyAuthenticated ~Throttled ~Logged ) ] },  # overrides "MC_REST_SimpleObject"
+        put_tags => { Does => [ qw( ~NonPublicApiKeyAuthenticated ~Throttled ~Logged ) ] },    #
+        count    => { Does => [ qw( ~PublicApiKeyAuthenticated ~Throttled ~Logged ) ] },       #
+      }    #
+);         #
 
 use MediaWords::Tagger;
 
@@ -41,8 +51,9 @@ sub get_table_name
     return "story_sentences";
 }
 
-sub list : Local : Does('~NonPublicApiKeyAuthenticated') : Does('~Throttled') : Does('~Logged')
+sub list : Local : ActionClass('REST')
 {
+    #say STDERR "starting Sentences/list";
 }
 
 # fill ss_ids temporary table with story_sentence_ids from the given sentences
@@ -69,7 +80,7 @@ sub _get_ss_ids_temporary_table
     return '_ss_ids';
 }
 
-# attach the following fields to each sentence: sentence_number, media_id, publish_date
+# attach the following fields to each sentence: sentence_number, media_id, publish_date, url, medium_name
 sub _attach_data_to_sentences
 {
     my ( $db, $sentences ) = @_;
@@ -79,9 +90,12 @@ sub _attach_data_to_sentences
     my $temp_ss_ids = _get_ss_ids_temporary_table( $db, $sentences );
 
     my $story_sentences = $db->query( <<END )->hashes;
-select ss.story_sentences_id, ss.sentence_number, ss.media_id, ss.publish_date
+select ss.story_sentences_id, ss.sentence_number, ss.media_id, ss.publish_date,
+        s.url, m.name medium_name
     from story_sentences ss
         join $temp_ss_ids q on ( ss.story_sentences_id = q.story_sentences_id )
+        join stories s on ( s.stories_id = ss.stories_id )
+        join media m on ( ss.media_id = m.media_id )
 END
 
     $db->query( "drop table $temp_ss_ids" );
@@ -92,7 +106,7 @@ END
     for my $sentence ( @{ $sentences } )
     {
         my $ss_data = $ss_lookup->{ $sentence->{ story_sentences_id } };
-        map { $sentence->{ $_ } = $ss_data->{ $_ } } qw/sentence_number media_id publish_date/;
+        map { $sentence->{ $_ } = $ss_data->{ $_ } } qw/sentence_number media_id publish_date url medium_name/;
     }
 }
 
@@ -151,7 +165,9 @@ sub list_GET : Local
 
     $rows = List::Util::min( $rows, 10000 );
 
-    my $list = MediaWords::Solr::query( $params );
+    my $list = MediaWords::Solr::query( $params, $c );
+
+    #say STDERR "Got List:\n" . Dumper( $list );
 
     my $sentences = $list->{ response }->{ docs };
 
@@ -160,8 +176,86 @@ sub list_GET : Local
     $self->status_ok( $c, entity => $list );
 }
 
+sub count : Local : ActionClass('REST')
+{
+}
+
+# get the overall count for the given query, plus a split of counts divided by
+# date ranges.  The date range is either daily, every 3 days, weekly, or monthly
+# depending on the number of total days in the query
+sub _get_count_with_split
+{
+    my ( $self, $c ) = @_;
+
+    my $q           = $c->req->params->{ 'q' };
+    my $fq          = $c->req->params->{ 'fq' };
+    my $start_date  = $c->req->params->{ 'split_start_date' };
+    my $end_date    = $c->req->params->{ 'split_end_date' };
+    my $split_daily = $c->req->params->{ 'split_daily' };
+
+    die( "must include split_start_date and split_end_date of split is true" ) unless ( $start_date && $end_date );
+
+    die( "split_start_date must be in the format YYYY-MM-DD" ) unless ( $start_date =~ /(\d\d\d\d)-(\d\d)-(\d\d)/ );
+    my ( $sdy, $sdm, $sdd ) = ( $1, $2, $3 );
+
+    die( "split_end_date must be in the format YYYY-MM-DD" ) unless ( $end_date =~ /(\d\d\d\d)-(\d\d)-(\d\d)/ );
+    my ( $edy, $edm, $edd ) = ( $1, $2, $3 );
+
+    my $days = Date::Calc::Delta_Days( $sdy, $sdm, $sdd, $edy, $edm, $edd );
+
+    my $facet_date_gap;
+
+    if    ( $split_daily ) { $facet_date_gap = '+1DAY' }
+    elsif ( $days < 15 )   { $facet_date_gap = '+1DAY' }
+    elsif ( $days < 45 )   { $facet_date_gap = '+3DAYS' }
+    elsif ( $days < 105 )  { $facet_date_gap = '+7DAYS' }
+    else                   { $facet_date_gap = '+1MONTH' }
+
+    my $params;
+    $params->{ q }                  = $q;
+    $params->{ fq }                 = $fq;
+    $params->{ facet }              = 'true';
+    $params->{ 'facet.date' }       = 'publish_date';
+    $params->{ 'facet.date.gap' }   = $facet_date_gap;
+    $params->{ 'facet.date.start' } = "${ start_date }T00:00:00Z";
+    $params->{ 'facet.date.end' }   = "${ end_date }T00:00:00Z";
+
+    my $solr_response = MediaWords::Solr::query( $params, $c );
+
+    return {
+        count => $solr_response->{ response }->{ numFound },
+        split => $solr_response->{ facet_counts }->{ facet_dates }->{ publish_date },
+    };
+}
+
+sub count_GET : Local
+{
+    my ( $self, $c ) = @_;
+
+    # say STDERR "starting list_GET";
+
+    my $params = {};
+
+    my $q     = $c->req->params->{ 'q' };
+    my $fq    = $c->req->params->{ 'fq' };
+    my $split = $c->req->params->{ 'split' };
+
+    my $response;
+    if ( $split )
+    {
+        $response = $self->_get_count_with_split( $c, $params );
+    }
+    else
+    {
+        my $list = MediaWords::Solr::query( { q => $q, fq => $fq }, $c );
+        $response = { count => $list->{ response }->{ numFound } };
+    }
+
+    $self->status_ok( $c, entity => $response );
+}
+
 ##TODO merge with stories put_tags
-sub put_tags : Local : Does('~NonPublicApiKeyAuthenticated') : Does('~Throttled') : Does('~Logged')
+sub put_tags : Local : ActionClass('REST')
 {
 }
 

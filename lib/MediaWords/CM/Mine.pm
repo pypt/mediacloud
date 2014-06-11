@@ -162,7 +162,7 @@ sub get_extracted_html
     if ( $@ )
     {
         MediaWords::DBI::Stories::fix_story_downloads_if_needed( $db, $story );
-        $extracted_html = MediaWords::DBI::Stories::get_extracted_html_from_db( $db, $story );
+        eval { $extracted_html = MediaWords::DBI::Stories::get_extracted_html_from_db( $db, $story ); };
     }
 
     return $extracted_html;
@@ -322,6 +322,25 @@ sub generate_medium_url_and_name_from_url
 
 }
 
+# make sure that the medium_name is unique so that we can insert it without causing an unique key error
+sub get_unique_medium_name
+{
+    my ( $db, $name, $i ) = @_;
+
+    my $q_name = $i ? "$name $1" : $name;
+
+    my $name_exists = $db->query( "select 1 from media where name = ?", $q_name )->hash;
+
+    if ( $name_exists )
+    {
+        return get_unique_medium_name( $db, $name, ++$i );
+    }
+    else
+    {
+        return $q_name;
+    }
+}
+
 # return a spider specific media_id for each story.  create a new spider specific medium
 # based on the domain of the story url
 sub get_spider_medium
@@ -343,6 +362,7 @@ END
 
     # avoid conflicts with existing media urls that are missed by the above query b/c of dups feeds or foreign_rss_links
     $medium_url = substr( $medium_url, 0, 1000 ) . '#spider';
+    $medium_name = get_unique_medium_name( $db, $medium_name );
 
     $medium = {
         name        => encode( 'utf8', substr( $medium_name, 0, 128 ) ),
@@ -678,7 +698,7 @@ select 1
         join controversies c on ( c.controversies_id = \$2 )
     where 
         d.stories_id = \$1 and
-        dt.download_text ~* c.pattern
+        dt.download_text ~ ( '(?isx)' || c.pattern )
     limit 1
 END
     return $dt ? 1 : 0;
@@ -697,7 +717,7 @@ select 1
         join controversies c on ( c.controversies_id = \$2 )
     where 
         ss.stories_id = \$1 and
-        ss.sentence ~* c.pattern and
+        ss.sentence ~ ( '(?isx)' || c.pattern ) and
         ssc.sentence_count < 2
     limit 1
 END
@@ -717,16 +737,16 @@ sub story_matches_controversy_pattern
     $perl_re =~ s/\[\[\:[\<\>]\:\]\]/\\b/g;
     for my $field ( qw/title description url redirect_url/ )
     {
-        return $field if ( $story->{ $field } =~ /$perl_re/is );
+        return $field if ( $story->{ $field } =~ /$perl_re/isx );
     }
 
     return 0 if ( $metadata_only );
 
-    # check for download_texts match first because some stories don't have
-    # story_sentences, and it is expensive to generate the missing story_sentences
-    return 0 unless ( story_download_text_matches_pattern( $db, $story, $controversy ) );
-
-    MediaWords::DBI::Stories::add_missing_story_sentences( $db, $story );
+    # # check for download_texts match first because some stories don't have
+    # # story_sentences, and it is expensive to generate the missing story_sentences
+    # return 0 unless ( story_download_text_matches_pattern( $db, $story, $controversy ) );
+    #
+    # MediaWords::DBI::Stories::add_missing_story_sentences( $db, $story );
 
     return story_sentence_matches_pattern( $db, $story, $controversy ) ? 'sentence' : 0;
 }
@@ -1727,103 +1747,23 @@ END
     return $normalized_urls;
 }
 
-# break a story down into parts separated by [-:|]
-sub get_title_parts
-{
-    my ( $title ) = @_;
-
-    $title = lc( $title );
-    $title =~ s/\s+/ /g;
-    $title =~ s/^\s+//;
-    $title =~ s/\s+$//;
-
-    my $title_parts;
-    if ( $title =~ m~http://[^ ]*^~ )
-    {
-        $title_parts = [ $title ];
-    }
-    else
-    {
-        $title_parts = [ split( /\s*[-:|]+\s*/, $title ) ];
-    }
-
-    map { s/^\s+//; s/\s+$//; } @{ $title_parts };
-
-    return $title_parts;
-}
-
-# get duplicate stories within the set of stires by breaking the title
-# of each story into parts by [-:|] and looking for any such part
-# that is the sole title part for any story and is at least 4 words long and
-# is not the title of a story with a path-less url.  Any story that includes that title
-# part becames a duplicate.
-sub get_medium_dup_stories_by_title
-{
-    my ( $db, $stories ) = @_;
-
-    my $title_part_counts = {};
-
-    for my $story ( @{ $stories } )
-    {
-        my $title_parts = $story->{ title_parts } = get_title_parts( $story->{ title } );
-
-        if ( @{ $title_parts } == 1 )
-        {
-            my $title_part = $title_parts->[ 0 ];
-
-            # solo title parts that are only a few words might just be the media source name
-            my $num_words = scalar( split( / /, $title_part ) );
-            next if ( $num_words < 5 );
-
-            # likewise, a solo title of a story with a url with no path is probably
-            # the media source name
-            next if ( URI->new( $story->{ url } )->path =~ /$\/?^/ );
-
-            $title_part_counts->{ $title_parts->[ 0 ] }->{ solo } = 1;
-        }
-
-        for my $title_part ( @{ $title_parts } )
-        {
-            $title_part_counts->{ $title_part }->{ count }++;
-            push( @{ $title_part_counts->{ $title_part }->{ stories } }, $story );
-        }
-    }
-
-    my $duplicate_stories = [];
-    for my $t ( grep { $_->{ solo } } values( %{ $title_part_counts } ) )
-    {
-        my $num_stories = @{ $t->{ stories } };
-        if ( ( $num_stories > 1 ) && ( $num_stories < 6 ) )
-        {
-            push( @{ $duplicate_stories }, $t->{ stories } );
-        }
-    }
-
-    return $duplicate_stories;
-}
-
-sub get_medium_dup_stories_by_url
-{
-    my ( $db, $stories ) = @_;
-
-    my $url_lookup = {};
-    for my $story ( @{ $stories } )
-    {
-        my $nu = MediaWords::Util::URL::normalize_url( $story->{ url } )->as_string;
-        $story->{ normalized_url } = $nu;
-        push( @{ $url_lookup->{ $nu } }, $story );
-    }
-
-    return [ map { { stories => $_ } } grep { ( @{ $_ } > 1 ) && ( @{ $_ } < 6 ) } values( %{ $url_lookup } ) ];
-}
-
 # given a list of stories, keep the story with the shortest title and
 # merge the other stories into that story
 sub merge_dup_stories
 {
     my ( $db, $controversy, $stories ) = @_;
 
-    $stories = [ sort { length( $a->{ title } ) <=> length( $b->{ title } ) } @{ $stories } ];
+    my $stories_ids_list = join( ',', map { $_->{ stories_id } } @{ $stories } );
+
+    my $story_sentence_counts = $db->query( <<END )->hashes;
+select stories_id, count(*) sentence_count from story_sentences where stories_id in ($stories_ids_list) group by stories_id
+END
+
+    my $ssc = {};
+    map { $ssc->{ $_->{ stories_id } } = 0 } @{ $stories };
+    map { $ssc->{ $_->{ stories_id } } = $_->{ sentence_count } } @{ $story_sentence_counts };
+
+    $stories = [ sort { $ssc->{ $b->{ stories_id } } <=> $ssc->{ $a->{ stories_id } } } @{ $stories } ];
 
     my $keep_story = shift( @{ $stories } );
 
@@ -1862,7 +1802,10 @@ sub find_and_merge_dup_stories
 {
     my ( $db, $controversy ) = @_;
 
-    for my $get_dup_stories ( \&get_medium_dup_stories_by_url, \&get_medium_dup_stories_by_title )
+    for my $get_dup_stories (
+        \&MediaWords::DBI::Stories::get_medium_dup_stories_by_url,
+        \&MediaWords::DBI::Stories::get_medium_dup_stories_by_title
+      )
     {
         # regenerate story list each time to capture previously merged stories
         my $media_lookup = get_controversy_stories_by_medium( $db, $controversy );
@@ -1870,7 +1813,7 @@ sub find_and_merge_dup_stories
         while ( my ( $media_id, $stories ) = each( %{ $media_lookup } ) )
         {
             my $dup_stories = $get_dup_stories->( $db, $stories );
-            map { merge_dup_stories( $db, $controversy, $_->{ stories } ) } @{ $dup_stories };
+            map { merge_dup_stories( $db, $controversy, $_ ) } @{ $dup_stories };
         }
     }
 }
